@@ -1,0 +1,317 @@
+---
+title: "Assignment 1"
+author: "Eugene Nguyen"
+date: "9/22/2021"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message = FALSE, warning = FALSE}
+library(tidyverse)
+library(data.table)
+library(skimr)
+library(lubridate)
+library(leaflet)
+```
+
+### Load Data
+```{r}
+df1 <- fread('2019.csv')
+df2 <- fread('2004.csv')
+```
+
+
+## 1. Given the formulated question from the assignment description, you will now conduct EDA Checklist items 2-4. First, download 2004 and 2019 data for all sites in California from the EPA Air Quality Data website. Read in the data using data.table(). For each of the two datasets, check the dimensions, headers, footers, variable names and variable types. Check for any data issues, particularly in the key variable we are analyzing. Make sure you write up a summary of all of your findings.
+
+### Check the dimensions
+```{r}
+# 2019
+dim(df1)
+
+# 2004
+dim(df2)
+```
+
+
+### Headers & Footers
+```{r}
+# 2019
+head(df1)
+tail(df1)
+
+# 2004
+head(df2)
+tail(df2)
+```
+
+
+### Variable Names
+```{r}
+# 2019
+names(df1)
+
+# 2004
+names(df2)
+```
+
+
+### Types
+```{r}
+# 2019
+str(df1)
+
+# 2004
+str(df2)
+```
+
+### Check for data issues
+
+### 2019 Data
+```{r}
+skim(df1)
+```
+> There are 4,181 missing in the CBSA_CODE column.Let's further investigate this variable and see what's going on.
+
+### Inspect missing CBSA_CODE
+```{r}
+df1 %>%
+  filter(is.na(CBSA_CODE))
+```
+> It appears as if there is still valuable data, so we will keep the rows.
+
+
+### 2004 Data
+```{r}
+skim(df2)
+```
+> Same as the 2019 data, there are some missing values in the CBSA_CODE field, but we will keep.
+
+## 2. Combine the two years of data into one data frame. Use the Date variable to create a new column for year, which will serve as an identifier. Change the names of the key variables so that they are easier to refer to in your code.
+
+### Combine dataframes
+```{r}
+# Union
+df <- union_all(df1, df2)
+```
+
+### Create a new column for year
+```{r}
+# Convert from chr to date
+df$Date <- mdy(df$Date)
+
+# Create year variable
+df$year <- year (df$Date)
+```
+
+### Change the names of key variables
+```{r}
+df <- 
+  df %>%
+  rename(pm = "Daily Mean PM2.5 Concentration"
+         , lat = "SITE_LATITUDE"
+         , lon = "SITE_LONGITUDE"
+         , site = "Site Name"
+         )
+```
+
+## 3. Create a basic map in leaflet() that shows the locations of the sites (make sure to use different colors for each year). Summarize the spatial distribution of the monitoring sites.
+```{r}
+# Aggregate data
+#df_avg <- df[,.(pm = mean(pm, na.rm=TRUE), lat = mean(lat), lon = mean(lon)),  by=c("year")]
+
+# Generating a color palette
+#pm.pal <- colorNumeric(c('darkgreen','goldenrod','brown'), domain=df$pm)
+year.pal <- colorFactor(c('firebrick','dodgerblue'), domain=df$year)
+```
+
+
+### Leaflet Graph
+```{r}
+tempmap <- leaflet(df) %>% 
+  # The looks of the Map
+  addProviderTiles('CartoDB.Positron') %>% 
+  # Some circles
+  addCircles(
+    lat = ~lat, lng=~lon,
+                                                  # HERE IS OUR PAL!
+    label = ~paste0(round(year,2), ' C'), color = ~ year.pal(year),
+    opacity = .5, fillOpacity = .5, radius = 500
+    ) %>%
+  # And a pretty legend
+  addLegend('bottomleft', pal=year.pal, values=df$year,
+          title='Temperature, C', opacity=1)
+
+tempmap
+```
+## 4. Check for any missing or implausible values of PM in the combined dataset. Explore the proportions of each and provide a summary of any temporal patterns you see in these observations.
+### Skim PM
+```{r}
+skim(df$pm)
+```
+
+### Check for negative values
+```{r}
+df %>%
+  filter(pm < 0)
+```
+
+
+### Plot PM
+```{r}
+ggplot(df, aes(x = pm)) +
+  geom_histogram()
+
+ggplot(df, aes(y = pm)) +
+  geom_boxplot()
+```
+
+### Categorize into groups
+```{r}
+# Create category for PM
+df <- 
+  df %>%
+  mutate(pm_cat = case_when(
+    pm < 50 ~ "Less than 50"
+    , pm >= 50 & pm < 100 ~ "50 - 100"
+    , pm >= 100 & pm < 150 ~ "100 - 150"
+    , pm >= 150 & pm < 200 ~ "150 - 200"
+    , pm >= 200 ~ "200+")
+  )
+
+# Convert to Factor
+df$pm_cat <- factor(df$pm_cat,
+                    levels = c("Less than 50"
+                               , "50 - 100"
+                               , "100 - 150"
+                               , "150 - 200"
+                               , "200+"))
+```
+
+### Contingency Tables
+```{r}
+table(df$COUNTY, df$pm_cat)
+```
+> It appears most values fall in the less than 50 group. Some values fall between 50 - 100, and there are rare values 100 and up. Fur future analyses, we might want to constrain the dataset to only include values less than 50. Further research on particulate matter air pollution should be investigated to see if values above 100 are possible.
+
+
+## 5. Explore the main question of interest at three different spatial levels. Create exploratory plots (e.g. boxplots, histograms, line plots) and summary statistics that best suit each level of data. Be sure to write up explanations of what you observe in these data.
+
+### State Exploratory Plots
+
+### Histogram
+```{r}
+# Histogram
+ggplot(df, aes(x = pm)) +
+  geom_histogram() +
+  facet_wrap(. ~ year)
+```
+### Boxplot
+```{r}
+ggplot(df, aes(y = pm)) +
+  geom_boxplot() +
+  facet_wrap(. ~ year)
+```
+### Time series
+```{r}
+ggplot(df, aes(x=Date, y=pm)) +
+  geom_line() +
+  facet_wrap(. ~ year, scales = "free")
+```
+
+### Summary Stats
+```{r}
+df %>%
+  group_by(year) %>%
+  summarise(mean_pm = mean(pm)
+            , sd_pm = sd(pm))
+```
+
+
+
+### County Exploratory Plots
+
+### Histogram
+```{r fig.height=20, fig.width=16}
+# Histogram
+df %>%
+  ggplot(aes(x = pm)) +
+  geom_histogram() +
+  facet_wrap(. ~ year + COUNTY, scales = "free")
+```
+
+### Boxplot
+```{r fig.height=20, fig.width=16}
+ggplot(df, aes(y = pm)) +
+  geom_boxplot() +
+  facet_wrap(. ~ year + COUNTY, scales = "free")
+```
+
+### Time Series
+```{r fig.height=20, fig.width=16}
+ggplot(df, aes(x=Date, y=pm)) +
+  geom_line() +
+  facet_wrap(. ~ year + COUNTY, scales = "free")
+```
+
+### Summary Stats
+```{r}
+df %>%
+  group_by(year, COUNTY) %>%
+  summarise(mean_pm = mean(pm)
+            , sd_pm = sd(pm)) %>%
+  top_n(5, mean_pm) %>%
+  arrange(desc(mean_pm), .by_group = TRUE)
+```
+> The table above shows the top 5 average particulate matter air pollution by year and county. Los Angeles and Kings continue to be in the top 5 from 2004 to 2019, but the pollution levels have decrease dramatically.
+
+
+### Site in Los Angeles Exploratory Plots
+
+### Histogram
+```{r fig.height=30, fig.width=25}
+# Histogram
+df %>%
+  ggplot(aes(x = pm)) +
+  geom_histogram() +
+  facet_wrap(. ~ year + site, scales = "free")
+```
+
+
+### Boxplot
+```{r fig.height=30, fig.width=25}
+ggplot(df, aes(y = pm)) +
+  geom_boxplot() +
+  facet_wrap(. ~ year + site, scales = "free")
+```
+
+### Time Series
+```{r fig.height=30, fig.width=25}
+ggplot(df, aes(x=Date, y=pm)) +
+  geom_line() +
+  facet_wrap(. ~ year + site, scales = "free")
+```
+
+### Summary Stats
+```{r}
+df %>%
+  group_by(year, site) %>%
+  summarise(mean_pm = mean(pm)
+            , sd_pm = sd(pm)) %>%
+   top_n(5, mean_pm) %>%
+  arrange(desc(mean_pm), .by_group = TRUE)
+```
+> > The table above shows the top 5 average particulate matter air pollution by year and site. It is obvious that pollution levels have significantly decreased since 2004.
+
+### Quick Hypothesis Test
+```{r}
+# Create year factor variable
+# Convert to Factor
+df$year_cat <- factor(df$year)
+
+lm(pm ~ year_cat, data = df) %>%
+  summary()
+```
+> This quick regression shows us that in 2019, the mean difference from 2004 was -5.39 in particulate matter. This effect was shown to be statistically signifigant (p < .001)

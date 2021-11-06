@@ -1,0 +1,221 @@
+---
+title: "Assignment 03 - Web Scraping and Text Mining"
+author: "Eugene Nguyen"
+date: "11/5/2021"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Libraries
+library(tidyverse)
+library(httr)
+```
+
+# APIs
+
+* Using the NCBI API, look for papers that show up under the term “sars-cov-2 trial vaccine.” Look for the data in the pubmed database, and then retrieve the details of the paper as shown in lab 7. How many papers were you able to find?
+```{r}
+# Downloading the website
+website <- xml2::read_html("https://pubmed.ncbi.nlm.nih.gov/?term=sars-cov-2+trial+vaccine")
+
+# # Finding the counts
+counts <- xml2::xml_find_first(website, "/html/body/main/div[9]/div[2]/div[2]/div[1]/div[1]/span")
+
+# Turning it into text
+counts <- as.character(counts)
+
+# Extracting the data using regex
+stringr::str_extract(counts, "[0-9,]+")
+```
+There are 2,336 papers that are found when looking up the keywords "sars-cov-2 trial vaccine".
+
+
+* Using the list of pubmed ids you retrieved, download each papers’ details using the query parameter rettype = abstract. If you get more than 250 ids, just keep the first 250.
+```{r}
+### Part 1
+library(httr)
+query_ids <- GET(
+  url   = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+  query = list(
+    db = "pubmed",
+    term = "sars-cov-2 trial vaccine",
+    retmax = 1000
+  )
+)
+
+# Extracting the content of the response of GET
+ids <- httr::content(query_ids)
+
+
+
+### Part 2
+# Turn the result into a character vector
+ids <- as.character(ids)
+
+# Find all the ids
+ids <- stringr::str_extract_all(ids, "<Id>[[:digit:]]+</Id>")[[1]]
+
+# Remove all the leading and trailing <Id> </Id>. Make use of "|"
+ids <- stringr::str_remove_all(ids, "<Id>|</Id>")
+
+# Keep the first 250 IDs
+ids <- ids[1:250]
+
+### Part 3
+# Create comma separated ids
+ids2 = I(paste(ids, collapse = ","))
+
+publications <- GET(
+  url   = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+  query = list(
+    db =  "pubmed",
+    id = ids2,
+    retmax = 1000,
+    rettype = "abstract"
+    )
+)
+
+# Turning the output into character vector
+publications <- httr::content(publications)
+publications_txt <- as.character(publications)
+```
+
+
+As we did in lab 7. Create a dataset containing the following:
+
+* Pubmed ID number,
+* Title of the paper,
+* Name of the journal where it was published,
+* Publication date, and
+* Abstract of the paper (if any).
+
+```{r}
+pub_char_list <- xml2::xml_children(publications)
+pub_char_list <- sapply(pub_char_list, as.character)
+```
+
+
+```{r}
+# Abstract
+abstracts <- str_extract(pub_char_list, "<Abstract>[[:print:][:space:]]+</Abstract>")
+abstracts <- str_remove_all(abstracts, "</?[[:alnum:]- =\"]+>")
+abstracts <- str_replace_all(abstracts, "[[:space:]]+", " ")
+```
+
+
+
+```{r}
+# Titles
+titles <- str_extract(pub_char_list, "<ArticleTitle>[[:print:][:space:]]+</ArticleTitle>")
+titles <- str_remove_all(titles, "</?[[:alnum:]- =\"]+>")
+```
+
+```{r}
+# Name of Journal
+journal <- str_extract(pub_char_list, "<Title>[[:print:][:space:]]+</Title>")
+journal <- str_remove_all(journal, "</?[[:alnum:]- =\"]+>")
+journal <- str_replace_all(journal, "[[:space:]]+", " ")
+```
+
+```{r}
+# Date
+date <- str_extract(pub_char_list, "<PubDate>[[:print:][:space:]]+</PubDate>")
+date <- str_remove_all(date, "</?[[:alnum:]- =\"]+>")
+date <- str_replace_all(date, "[[:space:]]+", " ")
+```
+
+
+```{r}
+# Create a database
+database <- data.frame(
+  Journal = journal,
+  Date = date,
+  PubMedID = ids,
+  Title = titles,
+  Abstract = abstracts
+)
+knitr::kable(database[1:20, ], caption = "Abstracts of sars-cov-2 trial vaccine Papers")
+```
+
+
+# Text Mining
+A new dataset has been added to the data science data repository https://github.com/USCbiostats/data-science-data/tree/master/03_pubmed. The dataset contains 3241 abstracts from articles across 5 search terms. Your job is to analyse these abstracts to find interesting insights.
+```{r}
+library(tidytext)
+library(tibble)
+
+# Import Data
+fn <- "pubmed.csv"
+
+if (!file.exists(fn))
+  download.file("https://raw.githubusercontent.com/USCbiostats/data-science-data/master/03_pubmed/pubmed.csv", destfile = fn)
+
+df <- read.csv(fn)
+df <- as.tibble(df)
+```
+
+
+1. Tokenize the abstracts and count the number of each token. Do you see anything interesting? Does removing stop words change what tokens appear as the most frequent? What are the 5 most common tokens for each search term after removing stopwords?
+```{r}
+# Tokenize the Abstract Column
+abstract_20 <- 
+  df %>%
+  unnest_tokens(token, abstract) %>%
+  count(token, sort = TRUE) %>%
+  top_n(20, n)
+
+abstract_20 %>%
+  knitr::kable()
+```
+
+Remove Stop Words
+```{r}
+# Remove Stop Words
+abstract_20_sw <- 
+  df %>%
+  unnest_tokens(output = word, input = abstract) %>%
+  count(word, sort = TRUE) %>%
+  anti_join(stop_words, by = "word") %>%
+  top_n(20)
+
+abstract_20_sw %>%
+  knitr::kable()
+```
+
+Once stop words were removed, covid, 19, patients, cancer, and prostate were the top words from these abstracts.
+
+
+
+2. Tokenize the abstracts into bigrams. Find the 10 most common bigram and visualize them with ggplot2.
+```{r}
+# Tokenize the Transcription Column into bi-grams/tri-grams
+# bi-gram
+abstract_bg <- 
+  df %>%
+  unnest_ngrams(ngram, abstract, n = 2) %>%
+  count(ngram, sort = TRUE) %>%
+  top_n(10, n)
+
+abstract_bg %>%
+  knitr::kable()
+
+# Visualize the top 10 bi-grams
+ggplot(abstract_bg, aes(x = ngram, y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+```
+
+
+3. Calculate the TF-IDF value for each word-search term combination. (here you want the search term to be the “document”) What are the 5 tokens from each search term with the highest TF-IDF value? How are the results different from the answers you got in question 1?
+```{r}
+df %>%
+  unnest_tokens(abstract, abstract) %>%
+  count(abstract, term) %>%
+  bind_tf_idf(abstract, term, n) %>%
+  arrange(desc(tf_idf))
+```
+COVID is still the top word when compared to Question 1, but now the TF-IDF results show prostate, eclampsia, preeclampsia, and meningitis appear to have the highest values.
+
+
